@@ -1,0 +1,62 @@
+name: WireGuard Server
+
+on:
+  workflow_dispatch:
+
+jobs:
+  start-server:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install WireGuard and dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wireguard iproute2 qrencode curl
+      - name: Generate WireGuard keys and config
+        id: generate
+        run: |
+          umask 077
+          SERVER_PRIVKEY=$(wg genkey)
+          SERVER_PUBKEY=$(echo "$SERVER_PRIVKEY" | wg pubkey)
+          CLIENT_PRIVKEY=$(wg genkey)
+          CLIENT_PUBKEY=$(echo "$CLIENT_PRIVKEY" | wg pubkey)
+          SERVER_PORT=51820
+          SERVER_IP=10.0.0.1/24
+          CLIENT_IP=10.0.0.2/24
+          ENDPOINT=$(curl -s https://ipv4.icanhazip.com)
+          echo "::set-output name=server_privkey::$SERVER_PRIVKEY"
+          echo "::set-output name=server_pubkey::$SERVER_PUBKEY"
+          echo "::set-output name=client_privkey::$CLIENT_PRIVKEY"
+          echo "::set-output name=client_pubkey::$CLIENT_PUBKEY"
+          echo "::set-output name=server_port::$SERVER_PORT"
+          echo "::set-output name=server_ip::$SERVER_IP"
+          echo "::set-output name=client_ip::$CLIENT_IP"
+          echo "::set-output name=endpoint::$ENDPOINT"
+      - name: Create server config
+        run: |
+          echo "[Interface]
+          Address = ${{ steps.generate.outputs.server_ip }}
+          ListenPort = ${{ steps.generate.outputs.server_port }}
+          PrivateKey = ${{ steps.generate.outputs.server_privkey }}
+
+          [Peer]
+          PublicKey = ${{ steps.generate.outputs.client_pubkey }}
+          AllowedIPs = ${{ steps.generate.outputs.client_ip }}" > wg0.conf
+      - name: Start WireGuard interface
+        run: |
+          sudo sysctl -w net.ipv4.ip_forward=1
+          sudo ip link add dev wg0 type wireguard || true
+          sudo ip address add ${{ steps.generate.outputs.server_ip }} dev wg0 || true
+          sudo wg setconf wg0 wg0.conf
+          sudo ip link set up dev wg0
+      - name: Generate client config
+        run: |
+          echo "[Interface]
+          PrivateKey = ${{ steps.generate.outputs.client_privkey }}
+          Address = ${{ steps.generate.outputs.client_ip }}
+          DNS = 1.1.1.1
+
+          [Peer]
+          PublicKey = ${{ steps.generate.outputs.server_pubkey }}
+          Endpoint = ${{ steps.generate.outputs.endpoint }}:${{ steps.generate.outputs.server_port }}
+          AllowedIPs = 0.0.0.0/0" > client.conf
+          cat client.conf
